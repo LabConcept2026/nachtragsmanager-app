@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Nachtragsmanager</title>
+<!-- Damit Browser und Handy die Seite als App mit eigenem Symbol installieren koennen -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="symbol-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#14304D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Nachträge">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 15px/1.5 system-ui, "Segoe UI", sans-serif; color: #1d2430;
+         background: radial-gradient(120% 100% at 15% 0%, #1F4C73 0%, #14304D 38%, #0B1E30 72%, #050D16 100%);
+         display: grid; place-items: center; padding: 24px; }
+  .karte { background: #fff; border-radius: 18px; padding: 34px 38px 30px; width: 100%; max-width: 400px;
+           box-shadow: 0 24px 60px rgba(0,0,0,.4); }
+  h1 { font-size: 22px; margin: 0 0 4px; text-align: center; }
+  .klein { color: #5b6576; font-size: 13px; text-align: center; margin: 0 0 20px; }
+  form { display: flex; flex-direction: column; gap: 10px; }
+  label { font-size: 12px; color: #5b6576; margin-bottom: -6px; }
+  input { font: inherit; padding: 9px 11px; border: 1px solid #d9dee6; border-radius: 8px; width: 100%; }
+  input:focus { outline: 2px solid #1F4C73; outline-offset: 0; border-color: #1F4C73; }
+  button { font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 8px; border: 0; background: #14304D; color: #fff; cursor: pointer; margin-top: 6px; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .fehler { color: #b3261e; font-weight: 600; font-size: 13px; min-height: 18px; margin: 2px 0 0; }
+</style>
+</head>
+<body>
+<!-- Diese Seite ist oeffentlich und enthaelt bewusst nichts ausser dem Anmeldeformular.
+     Das Programm liegt geschuetzt in Supabase (Bucket "programm") und wird erst nach der
+     Anmeldung geladen. Adresse und oeffentlicher Schluessel von Supabase duerfen hier stehen,
+     die Daten schuetzen Anmeldung und Zugriffsregeln. -->
+<div class="karte" id="karte">
+  <h1>Anmeldung</h1>
+  <p class="klein" id="hinweis">Bitte mit E-Mail und Passwort anmelden.</p>
+  <form id="formular" method="post" action="#" autocomplete="on">
+    <label for="email">E-Mail</label>
+    <input type="email" id="email" name="email" autocomplete="username" required>
+    <label for="passwort">Passwort</label>
+    <input type="password" id="passwort" name="password" autocomplete="current-password" required>
+    <p class="fehler" id="fehler"></p>
+    <button type="submit" id="knopf">Anmelden</button>
+  </form>
+</div>
+<script>
+(function () {
+  "use strict";
+  // Alles in dieser Funktion, damit nach dem Start des Programms keine Namen im Weg sind.
+  var ZIEL = Object.assign({
+    url: "https://pixioscvqhtcvtierjot.supabase.co",
+    schluessel: "sb_publishable_IbzgRLlvB0mwD-MgusVdmw_ZLExHrgC" // oeffentlicher Schluessel
+  }, window.NM_ONLINE_ZIEL || {});
+  var PROGRAMM = "programm/nachtragsmanager.html";
+  var MERKER = "nachtragsmanager_online_sitzung"; // derselbe Name wie im Programm, so ist man dort schon angemeldet
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  // Hintergrund-Helfer fuer "App installieren" bzw. "Zum Home-Bildschirm"
+  if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  }
+
+  function anmeldung(art, body) {
+    return fetch(ZIEL.url + "/auth/v1/token?grant_type=" + art, {
+      method: "POST",
+      headers: { apikey: ZIEL.schluessel, "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok) {
+          var text = d.error_description || d.msg || d.message || ("Fehler " + r.status);
+          throw new Error(/invalid login/i.test(text) ? "E-Mail oder Passwort stimmt nicht." : text);
+        }
+        try { sessionStorage.setItem(MERKER, JSON.stringify({ erneuern: d.refresh_token, email: (d.user || {}).email || body.email || "" })); } catch (e) {}
+        return d.access_token;
+      });
+    });
+  }
+
+  function programmLaden(token) {
+    return fetch(ZIEL.url + "/storage/v1/object/" + PROGRAMM, {
+      headers: { apikey: ZIEL.schluessel, Authorization: "Bearer " + token }
+    }).then(function (r) {
+      if (!r.ok) throw new Error(r.status === 400 || r.status === 403 || r.status === 404
+        ? "Dieses Konto hat keinen Zugang zum Nachtragsmanager. Bitte im Büro Bescheid geben."
+        : "Das Programm konnte nicht geladen werden (Fehler " + r.status + ").");
+      return r.text();
+    });
+  }
+
+  function programmStarten(html) {
+    document.open();
+    document.write(html);
+    document.close();
+  }
+
+  function fehler(e) {
+    try { sessionStorage.removeItem(MERKER); } catch (x) {}
+    $("fehler").textContent = e instanceof TypeError ? "Keine Verbindung. Bitte Internet prüfen." : e.message;
+    $("knopf").disabled = false;
+    $("knopf").textContent = "Anmelden";
+  }
+
+  $("formular").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    $("fehler").textContent = "";
+    $("knopf").disabled = true;
+    $("knopf").textContent = "Melde an ...";
+    var formular = this;
+    anmeldung("password", { email: $("email").value.trim(), password: $("passwort").value })
+      .then(function (token) {
+        $("knopf").textContent = "Lade den Nachtragsmanager ...";
+        // Browser bitten, die Zugangsdaten im eigenen Passwortspeicher anzubieten
+        var speichern = window.PasswordCredential ? navigator.credentials.store(new PasswordCredential(formular)).catch(function () {}) : Promise.resolve();
+        return Promise.all([ programmLaden(token), speichern ]);
+      })
+      .then(function (x) { programmStarten(x[0]); })
+      .catch(fehler);
+  });
+
+  // Schon angemeldet (z. B. nach dem Neuladen im selben Fenster): direkt starten
+  var gemerkt = null;
+  try { gemerkt = JSON.parse(sessionStorage.getItem(MERKER) || "null"); } catch (e) {}
+  if (gemerkt && gemerkt.erneuern) {
+    $("karte").style.visibility = "hidden";
+    anmeldung("refresh_token", { refresh_token: gemerkt.erneuern })
+      .then(programmLaden)
+      .then(programmStarten)
+      .catch(function (e) {
+        $("karte").style.visibility = "";
+        fehler(e instanceof TypeError || /Zugang/.test(e.message) ? e : new Error("Bitte neu anmelden."));
+      });
+  } else {
+    $("email").focus();
+  }
+})();
+</script>
+</body>
+</html>
